@@ -9,59 +9,76 @@ import express from "express";
 import morgan from "morgan";
 import sourceMapSupport from "source-map-support";
 
-sourceMapSupport.install({
-  retrieveSourceMap: function (source) {
-    // get source file without the `file://` prefix or `?t=...` suffix
-    const match = source.match(/^file:\/\/(.*)\?t=[.\d]+$/);
-    if (match) {
-      return {
-        url: source,
-        map: fs.readFileSync(`${match[1]}.map`, "utf8"),
-      };
-    }
-    return null;
-  },
-});
-installGlobals();
+import { wrapExpressCreateRequestHandler } from "@sentry/remix";
 
-/** @typedef {import('@remix-run/node').ServerBuild} ServerBuild */
+const createSentryRequestHandler =
+  wrapExpressCreateRequestHandler(createRequestHandler);
 
-const BUILD_PATH = path.resolve("build/index.js");
-const VERSION_PATH = path.resolve("build/version.txt");
+  
+  sourceMapSupport.install({
+    retrieveSourceMap: function (source) {
+      // get source file without the `file://` prefix or `?t=...` suffix
+      const match = source.match(/^file:\/\/(.*)\?t=[.\d]+$/);
+      if (match) {
+        return {
+          url: source,
+          map: fs.readFileSync(`${match[1]}.map`, "utf8"),
+        };
+      }
+      return null;
+    },
+  });
+  installGlobals();
+  
+  /** @typedef {import('@remix-run/node').ServerBuild} ServerBuild */
+  
+  const BUILD_PATH = path.resolve("build/index.js");
+  const VERSION_PATH = path.resolve("build/version.txt");
+  
+  const initialBuild = await reimportServer();
+  
+  // const remixHandler =
+  // process.env.NODE_ENV === "development"
+  // ? await createDevRequestHandler(initialBuild)
+  // : createRequestHandler({
+  //   build: initialBuild,
+  //   mode: initialBuild.mode,
+  // });
 
-const initialBuild = await reimportServer();
-const remixHandler =
+  const remixHandler =
   process.env.NODE_ENV === "development"
-    ? await createDevRequestHandler(initialBuild)
-    : createRequestHandler({
-        build: initialBuild,
-        mode: initialBuild.mode,
-      });
+  ? await createDevRequestHandler(initialBuild)
+  : createSentryRequestHandler({
+    build: initialBuild,
+    mode: initialBuild.mode,
+  });
+  
+  const app = express();
+  
+  app.use(compression());
+  
+  // http://expressjs.com/en/advanced/best-practice-security.html#at-a-minimum-disable-x-powered-by-header
+  app.disable("x-powered-by");
+  
+  // Remix fingerprints its assets so we can cache forever.
+  app.use(
+    "/build",
+    express.static("public/build", { immutable: true, maxAge: "1y" })
+    );
+    
+    // Everything else (like favicon.ico) is cached for an hour. You may want to be
+    // more aggressive with this caching.
+    app.use(express.static("public", { maxAge: "1h" }));
+    
+    app.use(morgan("tiny"));
+    
+    app.all("*", remixHandler); //commenting this line out and passing remixHandler to createSentryRequestHandler instead
 
-const app = express();
-
-app.use(compression());
-
-// http://expressjs.com/en/advanced/best-practice-security.html#at-a-minimum-disable-x-powered-by-header
-app.disable("x-powered-by");
-
-// Remix fingerprints its assets so we can cache forever.
-app.use(
-  "/build",
-  express.static("public/build", { immutable: true, maxAge: "1y" })
-);
-
-// Everything else (like favicon.ico) is cached for an hour. You may want to be
-// more aggressive with this caching.
-app.use(express.static("public", { maxAge: "1h" }));
-
-app.use(morgan("tiny"));
-
-app.all("*", remixHandler);
-
-const port = process.env.PORT || 3000;
-app.listen(port, async () => {
-  console.log(`Express server listening on port ${port}`);
+    // app.all("*", createSentryRequestHandler(remixHandler));
+    
+    const port = process.env.PORT || 3000;
+    app.listen(port, async () => {
+      console.log(`Express server listening on port ${port}`);
 
   if (process.env.NODE_ENV === "development") {
     broadcastDevReady(initialBuild);
@@ -102,7 +119,7 @@ async function createDevRequestHandler(initialBuild) {
   // wrap request handler to make sure its recreated with the latest build for every request
   return async (req, res, next) => {
     try {
-      return createRequestHandler({
+      return createSentryRequestHandler({
         build,
         mode: "development",
       })(req, res, next);

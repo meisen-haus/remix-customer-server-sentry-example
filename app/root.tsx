@@ -9,11 +9,27 @@ import {
   ScrollRestoration,
 } from "@remix-run/react";
 
+import { withSentry } from "@sentry/remix";
+import type { SentryMetaArgs } from "@sentry/remix";
+
+export const meta = ({ data }: SentryMetaArgs<MetaFunction<typeof loader>>) => {
+  return [
+    {
+      name: "sentry-trace",
+      content: data.sentryTrace,
+    },
+    {
+      name: "baggage",
+      content: data.sentryBaggage,
+    },
+  ];
+};
+
 export const links: LinksFunction = () => [
   ...(cssBundleHref ? [{ rel: "stylesheet", href: cssBundleHref }] : []),
 ];
 
-export default function App() {
+function App() {
   return (
     <html lang="en">
       <head>
@@ -31,3 +47,5 @@ export default function App() {
     </html>
   );
 }
+
+export default withSentry(App);
